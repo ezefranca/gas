@@ -1,10 +1,9 @@
 import requests
-from geopy.geocoders import Nominatim
 import json
 from tqdm import tqdm
 import time
+from geopy.geocoders import Nominatim
 
-# Function to fetch data from the API
 def fetch_data(url):
     headers = {
         'authority': 'precoscombustiveis.dgeg.gov.pt',
@@ -27,56 +26,25 @@ def fetch_data(url):
     response = requests.get(url, headers=headers)
     return response.json()
 
-# Function to perform geocoding using CodPostal and Localidade
-def geocode_location(location):
-    geolocator = Nominatim(user_agent="myGeocoder")
-    return geolocator.geocode(location, exactly_one=True)
+def is_within_portugal(latitude, longitude):
+    # Check if the latitude and longitude fall within Portugal's boundaries
+    return 36.8383 <= latitude <= 42.1542 and -9.5266 <= longitude <= -6.1892
 
-# Fetch the list of postos using asynchronous requests
-async def fetch_postos(url_postos):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url_postos) as response:
-            response.raise_for_status()  # Raise exception for failed requests
-            return await response.json()
-
-async def process_posto(posto):
-    posto_id = posto['Id']
-    url_bomba = f'https://precoscombustiveis.dgeg.gov.pt/api/PrecoComb/GetDadosPostoMapa?id={posto_id}&f=json'
-    response_bomba = await fetch_data(url_bomba)
-
-    # Use CodPostal for better accuracy
-    cod_postal = response_bomba['resultado']['Morada']['CodPostal']
-    location = await geocode_location(cod_postal)
-
-    # If CodPostal doesn't provide a precise location, use the Localidade
-    if not location:
-        localidade = response_bomba['resultado']['Morada']['Localidade']
-        location = await geocode_location(localidade)
-
-        if not location:
-            tqdm.write(f"\n⚠️ Warning: Latitude and Longitude not found for Posto Id: {posto_id}")
-
-    latitude = location.latitude if location else None
-    longitude = location.longitude if location else None
-
-    # Save the latitude and longitude to the posto data
-    posto['latitude'] = latitude
-    posto['longitude'] = longitude
-
-    # Simulate some delay for a fun progress bar animation
-    time.sleep(0.1)
-
-    # Display the progress bar with percentage of processed files
-    progress = (index / len(response_postos['resultado'])) * 100
-    tqdm.write(f"\r🌟 Processing postos: {index}/{len(response_postos['resultado'])} - {progress:.2f}% ", end="")
-
-print("Fetching data for postos...")
+# Fetch the list of postos
 url_postos = 'https://precoscombustiveis.dgeg.gov.pt/api/PrecoComb/ListarDadosPostos?qtdPorPagina=9999&pagina=1&orderDesc='
 response_postos = fetch_data(url_postos)
 
+print("Fetching data for postos...")
 # Create a progress bar with emojis
 for _ in tqdm(range(100), desc="🔍 Fetching data", ascii=True, ncols=100):
     time.sleep(0.03)  # Adding a slight delay for fun
+
+# Initialize the geolocator
+geolocator = Nominatim(user_agent="myGeocoder")
+
+# Lists to store logs
+not_found_locations = []
+locations_outside_portugal = []
 
 # Iterate through each posto and fetch additional details
 for index, posto in enumerate(response_postos['resultado'], 1):
@@ -86,26 +54,27 @@ for index, posto in enumerate(response_postos['resultado'], 1):
 
     # Use CodPostal for better accuracy
     cod_postal = response_bomba['resultado']['Morada']['CodPostal']
-    geolocator = Nominatim(user_agent="myGeocoder")
-    location = geolocator.geocode(cod_postal, exactly_one=True)
+    location = geolocator.geocode(cod_postal, exactly_one=True, country_codes=['pt'])
 
     # If CodPostal doesn't provide a precise location, use the Localidade
     if not location:
         localidade = response_bomba['resultado']['Morada']['Localidade']
-        location = geolocator.geocode(localidade, exactly_one=True)
+        location = geolocator.geocode(localidade, exactly_one=True, country_codes=['pt'])
 
-        if not location:
-            tqdm.write(f"\n⚠️ Warning: Latitude and Longitude not found for Posto Id: {posto_id}")
-
+    # Check if the location is within Portugal's boundaries
     latitude = location.latitude if location else None
     longitude = location.longitude if location else None
+    if latitude and longitude:
+        if not is_within_portugal(latitude, longitude):
+            locations_outside_portugal.append(posto_id)
+            latitude = None
+            longitude = None
+    else:
+        not_found_locations.append(posto_id)
 
     # Save the latitude and longitude to the posto data
     posto['latitude'] = latitude
     posto['longitude'] = longitude
-
-    # Simulate some delay for a fun progress bar animation
-    # time.sleep(0.1)
 
     # Display the progress bar with percentage of processed files
     progress = (index / len(response_postos['resultado'])) * 100
@@ -119,3 +88,10 @@ with open(output_file, 'w') as json_file:
     json.dump(response_postos['resultado'], json_file, indent=2)
 
 print(f"📝 Data saved to {output_file}.")
+
+# Logging
+if not_found_locations:
+    print(f"\n🚫 Locations not found for postos with IDs: {', '.join(map(str, not_found_locations))}")
+
+if locations_outside_portugal:
+    print(f"\n⚠️ Locations found outside Portugal for postos with IDs: {', '.join(map(str, locations_outside_portugal))}")
