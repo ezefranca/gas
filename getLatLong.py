@@ -30,6 +30,28 @@ def is_within_portugal(latitude, longitude):
     # Check if the latitude and longitude fall within Portugal's boundaries
     return 36.8383 <= latitude <= 42.1542 and -9.5266 <= longitude <= -6.1892
 
+def process_postos(postos_data):
+    # Sort the postos based on the availability of latitude and longitude
+    postos_with_lat_long = []
+    postos_outside_portugal = []
+    postos_without_lat_long = []
+
+    for posto in postos_data:
+        latitude = posto.get('latitude')
+        longitude = posto.get('longitude')
+
+        if latitude and longitude:
+            if is_within_portugal(latitude, longitude):
+                postos_with_lat_long.append(posto)
+            else:
+                postos_outside_portugal.append(posto)
+        else:
+            postos_without_lat_long.append(posto)
+
+    # Concatenate the three lists to create the final sorted postos list
+    sorted_postos = postos_without_lat_long + postos_outside_portugal + postos_with_lat_long
+    return sorted_postos
+
 # Fetch the list of postos
 url_postos = 'https://precoscombustiveis.dgeg.gov.pt/api/PrecoComb/ListarDadosPostos?qtdPorPagina=9999&pagina=1&orderDesc='
 response_postos = fetch_data(url_postos)
@@ -52,13 +74,16 @@ for index, posto in enumerate(response_postos['resultado'], 1):
     url_bomba = f'https://precoscombustiveis.dgeg.gov.pt/api/PrecoComb/GetDadosPostoMapa?id={posto_id}&f=json'
     response_bomba = fetch_data(url_bomba)
 
+    # Update the posto object with all properties from the second request
+    posto.update(response_bomba['resultado'])
+
     # Use CodPostal for better accuracy
-    cod_postal = response_bomba['resultado']['Morada']['CodPostal']
+    cod_postal = posto['Morada']['CodPostal']
     location = geolocator.geocode(cod_postal, exactly_one=True, country_codes=['pt'])
 
     # If CodPostal doesn't provide a precise location, use the Localidade
     if not location:
-        localidade = response_bomba['resultado']['Morada']['Localidade']
+        localidade = posto['Morada']['Localidade']
         location = geolocator.geocode(localidade, exactly_one=True, country_codes=['pt'])
 
     # Check if the location is within Portugal's boundaries
@@ -76,9 +101,14 @@ for index, posto in enumerate(response_postos['resultado'], 1):
     posto['latitude'] = latitude
     posto['longitude'] = longitude
 
+    # Save the data to a JSON file after processing each posto
+    output_file = 'postos_with_coords.json'
+    with open(output_file, 'w') as json_file:
+        json.dump(response_postos['resultado'], json_file, indent=2)
+
     # Display the progress bar with percentage of processed files
     progress = (index / len(response_postos['resultado'])) * 100
-    tqdm.write(f"\r🌟 Processing postos: {index}/{len(response_postos['resultado'])} - {progress:.2f}% ", end="")
+    tqdm.write(f"\r🌟 Processing postos: {index}/ lat: {latitude}/, long: {longitude}/ | {len(response_postos['resultado'])} - {progress:.2f}% ", end="")
 
 print("\n🎉 Data fetching and geocoding completed.")
 
@@ -95,3 +125,11 @@ if not_found_locations:
 
 if locations_outside_portugal:
     print(f"\n⚠️ Locations found outside Portugal for postos with IDs: {', '.join(map(str, locations_outside_portugal))}")
+
+# Process the results and generate a new JSON file with the sorted postos
+sorted_postos = process_postos(response_postos['resultado'])
+output_file_sorted = 'postos_sorted.json'
+with open(output_file_sorted, 'w') as json_file_sorted:
+    json.dump(sorted_postos, json_file_sorted, indent=2)
+
+print(f"📝 Data saved to {output_file_sorted}.")
